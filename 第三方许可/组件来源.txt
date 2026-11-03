@@ -1,0 +1,3 @@
+﻿UE4SS 项目：https://github.com/UE4SS-RE/RE-UE4SS
+随包包含游戏适配版本及 UEHelpers、签名配置；UE4SS MIT 许可见同目录 UE4SS_LICENSE.txt。
+本 MOD 的动画由用户本机合法安装的艾尔登法环原版动作转制，用于用户本地影之刃零安装；上述 MIT 许可仅适用于相应第三方代码，不授予游戏动画素材的权利。
