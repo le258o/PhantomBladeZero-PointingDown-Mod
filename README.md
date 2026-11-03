@@ -3,9 +3,15 @@
 版本：0.5.4
 
 将《艾尔登法环》原版下指嘲讽动作移植到《影之刃零》。按 **O** 播放，动作期间可用 **WASD** 平滑转向、鼠标转动镜头，按 **Backspace** 提前取消。
-<img width="1322" height="1090" alt="92a0646369debee888b76b7e93064e02" src="https://github.com/user-attachments/assets/24ca5e44-c9f9-499a-a1f6-2852340d7462" />
-<img width="680" height="1156" alt="7f2b0f355145f221a489d078ccec06fd" src="https://github.com/user-attachments/assets/a1b90b78-cf6d-4214-8b25-660072a3293d" />
+<p align="center">
+  <img width="700" alt="92a0646369debee888b76b7e93064e02"
+       src="https://github.com/user-attachments/assets/24ca5e44-c9f9-499a-a1f6-2852340d7462">
+</p>
 
+<p align="center">
+  <img width="400" alt="7f2b0f355145f221a489d078ccec06fd"
+       src="https://github.com/user-attachments/assets/a1b90b78-cf6d-4214-8b25-660072a3293d">
+</p>
 
 ## 实现方式
 
