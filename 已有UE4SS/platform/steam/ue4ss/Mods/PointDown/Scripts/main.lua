@@ -1,6 +1,13 @@
 -- Native AnimSequence test candidate. No helper meshes or LeaderPose changes.
 local U=require('UEHelpers')
-local VERSION='0.5.4'
+local VERSION='0.5.4-ps-native-test1'
+-- Controller settings: degrees/second, radial deadzone, invert vertical camera.
+local PAD_DEADZONE=.18
+local PAD_YAW_SPEED=180
+local PAD_PITCH_SPEED=120
+local PAD_INVERT_Y=false
+local MOUSE_FALLBACK_X=.08
+local MOUSE_FALLBACK_Y=-.08
 local TURN_RATE=360 -- degrees per second, shortest arc, no instantaneous snap
 local ASSET='/HuaShira/PointDownMod/PD_PointDown_V3.PD_PointDown_V3'
 local state=nil
@@ -8,8 +15,16 @@ local queued=false
 local function log(s) print('[PointDownNative] '..tostring(s)..'\n') end
 local function valid(v) local ok,r=pcall(function() return v:IsValid() end);return ok and r end
 local function time(p) return U.GetGameplayStatics():GetTimeSeconds(p) end
-local keys={};for _,k in ipairs({'W','A','S','D','MouseX','MouseY'}) do keys[k]={KeyName=FName(k)} end
+local keys={};for _,k in ipairs({'W','A','S','D','MouseX','MouseY','Gamepad_LeftX','Gamepad_LeftY','Gamepad_RightX','Gamepad_RightY'}) do keys[k]={KeyName=FName(k)} end
 keys.Mouse2D={KeyName=FName('Mouse2D')}
+local function stick(pc,xkey,ykey)
+ local x=pc:GetInputAnalogKeyState(keys[xkey])
+ local y=pc:GetInputAnalogKeyState(keys[ykey])
+ local length=math.sqrt(x*x+y*y)
+ if length<=PAD_DEADZONE then return 0,0 end
+ local scale=math.min(1,(length-PAD_DEADZONE)/(1-PAD_DEADZONE))/length
+ return x*scale,y*scale
+end
 local calibration={x={},y={}}
 local previous=nil
 local function angle(v) return (v+180)%360-180 end
@@ -66,7 +81,7 @@ local function start()
  local ai=m:GetAnimInstance();if not valid(ai) or ai:IsAnyMontagePlaying() then log('Wait until the current action finishes.');return end
  local v=p:GetVelocity();if v.X*v.X+v.Y*v.Y+v.Z*v.Z>1 then log('Stand still first.');return end
  local gx,gy=gain(calibration.x),gain(calibration.y)
- if not gx or not gy then log('LOOK CALIBRATION: stand still and move mouse left/right and up/down for a moment before O.');return end
+ gx=gx or MOUSE_FALLBACK_X;gy=gy or MOUSE_FALLBACK_Y -- gamepad needs no mouse calibration
  -- LoadAsset_Blocking takes TSoftObjectPtr, NOT an FSoftObjectPath/Lua table.
  -- Use engine conversion and preserve UE4SS's native TSoftObjectPtr userdata.
  local k=U.GetKismetSystemLibrary()
@@ -121,18 +136,21 @@ local function tick()
  local dt=math.max(0,math.min(now-s.lastTick,.1));s.lastTick=now
  if not s.pc:IsLookInputIgnored() then
   local raw=s.pc:GetInputVectorKeyState(keys.Mouse2D)
-  if raw.X~=0 or raw.Y~=0 then
-   local r=s.pc:GetControlRotation()
-   s.pc:SetControlRotation({Yaw=r.Yaw+raw.X*s.lookX,
-    Pitch=math.max(s.pitchMin,math.min(angle(r.Pitch)+raw.Y*s.lookY,s.pitchMax)),Roll=r.Roll})
+  local rx,ry=stick(s.pc,'Gamepad_RightX','Gamepad_RightY')
+   if raw.X~=0 or raw.Y~=0 or rx~=0 or ry~=0 then
+    local r=s.pc:GetControlRotation()
+   s.pc:SetControlRotation({Yaw=r.Yaw+raw.X*s.lookX+rx*PAD_YAW_SPEED*dt,
+    Pitch=math.max(s.pitchMin,math.min(angle(r.Pitch)+raw.Y*s.lookY+ry*PAD_PITCH_SPEED*dt*(PAD_INVERT_Y and -1 or 1),s.pitchMax)),Roll=r.Roll})
   end
  end
  local l=p:K2_GetActorLocation();local a=s.anchor
  if (l.X-a.X)^2+(l.Y-a.Y)^2+(l.Z-a.Z)^2>.0001 then p:K2_SetActorLocation(a,false,{},true) end
  local x=(s.pc:IsInputKeyDown(keys.D) and 1 or 0)-(s.pc:IsInputKeyDown(keys.A) and 1 or 0)
  local y=(s.pc:IsInputKeyDown(keys.W) and 1 or 0)-(s.pc:IsInputKeyDown(keys.S) and 1 or 0)
- if x~=0 or y~=0 then
-  local target=s.pc:GetControlRotation().Yaw+math.deg(math.atan(x,y))
+ local lx,ly=stick(s.pc,'Gamepad_LeftX','Gamepad_LeftY')
+  if x==0 and y==0 then x=lx;y=ly end
+  if x~=0 or y~=0 then
+   local target=s.pc:GetControlRotation().Yaw+math.deg(math.atan(x,y))
   local current=p:K2_GetActorRotation().Yaw
   local delta=(target-current+180)%360-180
   local step=math.max(-TURN_RATE*dt,math.min(delta,TURN_RATE*dt))
@@ -140,7 +158,42 @@ local function tick()
  end
 end
 local function guarded(f) local ok,e=xpcall(f,debug.traceback);if not ok then log('ERROR '..tostring(e));finish('error') end end
+-- This C module uses no Lua ABI functions. It runs inside PBZ and reads shared HID
+-- handles, never registering Raw Input over the game's own registration.
+local psEventPath=nil
+local psLastEvent='0'
+local psReadCounter=0
+local psSync=nil
+local function pollTouch()
+ if not psEventPath then return end
+ psReadCounter=(psReadCounter+1)%6;if psReadCounter~=0 then return end
+ psSync()
+ local f=io.open(psEventPath,'r');if not f then return end
+ local row=f:read('*l');f:close()
+ if not row then return end
+ local seq,command=row:match('^(%d+)|([%a_]+)')
+ if not seq or seq==psLastEvent then return end
+ psLastEvent=seq
+ if command=='down' then start() elseif command=='up' then finish('touch cancelled')
+ elseif command~='ready' and command~='discard' then log('PS native status: '..row) end
+end
+do
+ local origin=debug.getinfo(1,'S').source
+ local dir=origin:match('^@(.+[/\\])')
+ if dir and package and package.loadlib then
+  local loader,err=package.loadlib(dir..'PSNative.dll','pbz_start')
+  local sync=package.loadlib(dir..'PSNative.dll','pbz_sync')
+  if loader and sync then
+   loader()
+   psSync=sync
+   psEventPath=dir..'PSNative.event'
+   local f=io.open(psEventPath,'r')
+   if f then local row=f:read('*l');f:close();psLastEvent=(row or ''):match('^(%d+)') or '0' end
+   log('PS native module loaded in-process; swipe down=play, up=cancel.')
+  else log('PS native module unavailable: '..tostring(err)) end
+ else log('PS native module: script directory or package.loadlib unavailable') end
+end
 RegisterKeyBind(Key.O,function() ExecuteInGameThread(function() guarded(start) end) end)
 RegisterKeyBind(Key.BACKSPACE,function() ExecuteInGameThread(function() finish('cancelled') end) end)
-LoopAsync(5,function() if not queued then queued=true;ExecuteInGameThread(function() guarded(state and tick or observe);queued=false end) end;return false end)
-log('Candidate '..VERSION..' loaded. O=play, WASD=turn, Backspace=cancel. Game validation pending.')
+LoopAsync(5,function() if not queued then queued=true;ExecuteInGameThread(function() guarded(function() pollTouch();if state then tick() else observe() end end);queued=false end) end;return false end)
+log('Candidate '..VERSION..' loaded. O=play, WASD=turn, Backspace=cancel. PS native touch and sticks enabled. Hardware/game validation pending.')
